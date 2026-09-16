@@ -36,9 +36,11 @@ class PaymentGatewayService
         $phone = str_replace('+', '', $phone);
 
         if (config('zynlepay.mock')) {
-            Log::info('ZynlePay [MOCK] push initiated', ['phone' => $phone, 'amount' => $amount, 'reference' => $reference]);
+            $rejected = config('zynlepay.mock_reject_push', false);
 
-            return ['accepted' => true, 'response' => ['mock' => true]];
+            Log::info('ZynlePay [MOCK] push ' . ($rejected ? 'rejected' : 'initiated'), ['phone' => $phone, 'amount' => $amount, 'reference' => $reference]);
+
+            return ['accepted' => !$rejected, 'response' => ['mock' => true, 'rejected' => $rejected]];
         }
 
         $response = $this->momoDebit($phone, $amount, $reference);

@@ -2,25 +2,26 @@
 
 namespace App\Ussd\Actions;
 
-use App\Jobs\CheckZynlePayPaymentJob;
+use App\Jobs\SendPaymentPushJob;
 use App\Models\Transaction;
-use App\Services\PaymentGatewayService;
-use App\Ussd\States\Shared\PaymentFailedState;
 use App\Ussd\States\Shared\PaymentPendingState;
 use Illuminate\Support\Str;
 use Sparors\Ussd\Action;
 
 /**
- * Sends the mobile money push and ends the USSD session immediately —
- * exactly like a real council/bank USSD flow: the session cannot stay
- * open waiting for the customer to approve a prompt on their phone
- * (that can take anywhere from a few seconds to a couple of minutes).
+ * Ends the USSD session immediately and hands the actual payment work off
+ * to the queue entirely — exactly like a real council/bank USSD flow: the
+ * session cannot stay open waiting for a customer to approve a prompt on
+ * their phone (that can take anywhere from a few seconds to several
+ * minutes), and it must not tie up the PHP process/worker handling this
+ * HTTP request while a network call to the payment gateway is in flight.
  *
- * Whether it actually succeeds is determined afterwards, out of band, by
- * App\Jobs\CheckZynlePayPaymentJob — which is also the only place the
- * success/failure SMS is sent from. This action only reports whether the
- * gateway *accepted the request* (PaymentPendingState), or rejected it
- * outright (PaymentFailedState) — e.g. malformed request, gateway down.
+ * The only work done here, in the request/response cycle, is a local DB
+ * insert (the pending transaction) and enqueuing a job — both fast and
+ * local, no external network calls. SendPaymentPushJob (queued) is what
+ * actually calls the gateway to send the push; CheckZynlePayPaymentJob
+ * (dispatched by it) is what polls for the outcome and sends the
+ * success/failure SMS. See docs/README §2a.
  */
 class InitiatePaymentAction extends Action
 {
@@ -49,24 +50,7 @@ class InitiatePaymentAction extends Action
 
         $this->record->deleteMultiple(['cart_title', 'cart_items', 'cart_total', 'cart_category', 'cart_meta', 'cart_cancel_next']);
 
-        $gateway = app(PaymentGatewayService::class);
-        $result = $gateway->initiate($phone, $total, $reference);
-
-        if (!$result['accepted']) {
-            $transaction->update([
-                'status' => 'failed',
-                'gateway_response' => json_encode($result['response']),
-                'completed_at' => now(),
-            ]);
-
-            $this->record->set('failure_title', $title);
-            $this->record->set('failure_reference', $reference);
-
-            return PaymentFailedState::class;
-        }
-
-        CheckZynlePayPaymentJob::dispatch($transaction->id)
-            ->delay(now()->addSeconds((int) config('zynlepay.poll_first_delay_seconds', 5)));
+        SendPaymentPushJob::dispatch($transaction->id);
 
         $this->record->set('pending_title', $title);
         $this->record->set('pending_amount', $total);
