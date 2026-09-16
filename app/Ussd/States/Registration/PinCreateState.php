@@ -8,7 +8,7 @@ class PinCreateState extends TextInputState
 {
     protected function prompt(): string
     {
-        return "Create a 4-digit PIN to secure your payments:";
+        return "Create a 4-digit COUNCIL PIN (not your mobile money PIN) to confirm payments on this platform:";
     }
 
     protected function recordKey(): string

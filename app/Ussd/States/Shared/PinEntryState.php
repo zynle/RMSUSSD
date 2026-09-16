@@ -28,8 +28,8 @@ class PinEntryState extends State
         $total = (float) $this->record->get('cart_total', 0);
 
         $this->menu
-            ->line('Please enter your PIN to complete the transaction of')
-            ->text(Money::fmt($total));
+            ->line('Enter your 4-digit COUNCIL PIN to confirm this ' . Money::fmt($total) . ' payment.')
+            ->text('(Not your mobile money PIN)');
     }
 
     protected function afterRendering(string $argument): void
@@ -75,7 +75,7 @@ class PinEntryState extends State
             }
 
             $remaining = self::MAX_ATTEMPTS - $ratepayer->pin_attempts;
-            $this->fail("Incorrect PIN. {$remaining} attempt(s) remaining.\n\nPlease enter your PIN to complete the transaction of\n" . Money::fmt((float) $this->record->get('cart_total', 0)));
+            $this->fail("Incorrect Council PIN. {$remaining} attempt(s) left.\nEnter your 4-digit COUNCIL PIN to confirm this " . Money::fmt((float) $this->record->get('cart_total', 0)) . ' payment.');
 
             return;
         }
