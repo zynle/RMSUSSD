@@ -18,7 +18,7 @@ class FirstNameState extends TextInputState
 
     protected function nextState(): string
     {
-        return ProvinceState::class;
+        return LastNameState::class;
     }
 
     protected function validate(string $value): ?string

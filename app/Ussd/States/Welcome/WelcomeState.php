@@ -3,7 +3,7 @@
 namespace App\Ussd\States\Welcome;
 
 use App\Ussd\States\Errors\GoodbyeState;
-use App\Ussd\States\Registration\LastNameState;
+use App\Ussd\States\Registration\FirstNameState;
 use App\Ussd\Support\OptionMenuState;
 
 class WelcomeState extends OptionMenuState
@@ -16,7 +16,7 @@ class WelcomeState extends OptionMenuState
     protected function options(): array
     {
         return [
-            '1' => ['label' => 'Register now', 'next' => LastNameState::class],
+            '1' => ['label' => 'Register now', 'next' => FirstNameState::class],
             '00' => ['label' => 'Exit', 'next' => GoodbyeState::class],
         ];
     }

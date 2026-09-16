@@ -14,7 +14,7 @@ class RegistrationSuccessState extends State
             ->line('Registration successful!')
             ->lineBreak()
             ->line('To access services, dial the USSD code again:')
-            ->text('*262*22#');
+            ->text('*' . config('ussdgateway.display_shortcode') . '#');
     }
 
     protected function afterRendering(string $argument): void

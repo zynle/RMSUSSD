@@ -14,8 +14,8 @@ class GenderState extends OptionMenuState
     protected function options(): array
     {
         return [
-            '1' => ['label' => 'Male', 'next' => FirstNameState::class, 'set' => ['reg_gender' => 'male']],
-            '2' => ['label' => 'Female', 'next' => FirstNameState::class, 'set' => ['reg_gender' => 'female']],
+            '1' => ['label' => 'Male', 'next' => ProvinceState::class, 'set' => ['reg_gender' => 'male']],
+            '2' => ['label' => 'Female', 'next' => ProvinceState::class, 'set' => ['reg_gender' => 'female']],
         ];
     }
 }
