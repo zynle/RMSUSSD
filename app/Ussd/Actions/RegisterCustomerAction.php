@@ -4,6 +4,7 @@ namespace App\Ussd\Actions;
 
 use App\Models\Ratepayer;
 use App\Ussd\States\Registration\RegistrationSuccessState;
+use Illuminate\Support\Facades\Log;
 use Sparors\Ussd\Action;
 
 class RegisterCustomerAction extends Action
@@ -17,6 +18,7 @@ class RegisterCustomerAction extends Action
     public function run(): string
     {
         $phone = $this->record->get('phoneNumber');
+        $isNewRegistration = !Ratepayer::where('phone', $phone)->where('is_registered', true)->exists();
 
         $ratepayer = Ratepayer::updateOrCreate(
             ['phone' => $phone],
@@ -39,6 +41,13 @@ class RegisterCustomerAction extends Action
 
         $this->record->deleteMultiple(self::REGISTRATION_KEYS);
         $this->record->set('ratepayer_name', $ratepayer->fullName());
+
+        Log::info(($isNewRegistration ? 'New ratepayer registered' : 'Ratepayer re-registered/updated') . ": #{$ratepayer->id} {$ratepayer->fullName()}", [
+            'ratepayer_id' => $ratepayer->id,
+            'phone' => $phone,
+            'district' => $ratepayer->district,
+            'ward' => $ratepayer->ward,
+        ]);
 
         app(\App\Services\SmsService::class)->send(
             $phone,
