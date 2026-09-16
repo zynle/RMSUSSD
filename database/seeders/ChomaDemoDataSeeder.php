@@ -23,6 +23,13 @@ class ChomaDemoDataSeeder extends Seeder
     {
         $council = Council::where('code', 'CHOMA')->first();
 
+        // Same USSD_TEST_LOW_RATES switch as LevyRateSeeder — when set, the
+        // property/license/permit amounts below (which aren't driven by the
+        // levy_rates table) are also collapsed to USSD_TEST_RATE_AMOUNT so a
+        // live payment test costs a few ngwee/kwacha instead of thousands.
+        $testMode = filter_var(env('USSD_TEST_LOW_RATES', false), FILTER_VALIDATE_BOOLEAN);
+        $testAmount = (float) env('USSD_TEST_RATE_AMOUNT', 1);
+
         $ratepayers = [
             [
                 'phone' => '260977000001',
@@ -121,8 +128,8 @@ class ChomaDemoDataSeeder extends Seeder
                 'phone' => '260977000003',
                 'owner_name' => 'Kumawa Farms',
                 'rate_type' => 'property_rates',
-                'balance_bf' => 450.00,
-                'charge' => 2500.00,
+                'balance_bf' => $testMode ? 0 : 450.00,
+                'charge' => $testMode ? $testAmount : 2500.00,
                 'status' => 'unpaid',
             ]
         );
@@ -132,8 +139,8 @@ class ChomaDemoDataSeeder extends Seeder
                 'phone' => '260977000003',
                 'owner_name' => 'Planet Auto Spares',
                 'rate_type' => 'property_rates',
-                'balance_bf' => 450.00,
-                'charge' => 3000.00,
+                'balance_bf' => $testMode ? 0 : 450.00,
+                'charge' => $testMode ? $testAmount : 3000.00,
                 'status' => 'unpaid',
             ]
         );
@@ -147,7 +154,7 @@ class ChomaDemoDataSeeder extends Seeder
                 'store_no' => '2604',
                 'district' => 'Choma',
                 'type' => 'Liquor License',
-                'amount' => 5000.00,
+                'amount' => $testMode ? $testAmount : 5000.00,
                 'status' => 'unpaid',
             ]
         );
@@ -161,7 +168,7 @@ class ChomaDemoDataSeeder extends Seeder
                 'nationality' => 'Kenyan',
                 'company' => 'Oxylane Digital',
                 'type' => 'Work Permit',
-                'amount' => 5000.00,
+                'amount' => $testMode ? $testAmount : 5000.00,
                 'status' => 'unpaid',
             ]
         );

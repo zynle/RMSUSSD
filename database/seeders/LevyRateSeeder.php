@@ -7,8 +7,18 @@ use Illuminate\Database\Seeder;
 
 class LevyRateSeeder extends Seeder
 {
+    /**
+     * When USSD_TEST_LOW_RATES=true (see .env), every rate below is
+     * overridden to USSD_TEST_RATE_AMOUNT (default 1.00) so real mobile
+     * money payments can be tested end-to-end for a few ngwee/kwacha
+     * instead of the real council fee schedule. Never enable this in
+     * production — it exists purely for live-payment smoke testing.
+     */
     public function run(): void
     {
+        $testMode = filter_var(env('USSD_TEST_LOW_RATES', false), FILTER_VALIDATE_BOOLEAN);
+        $testAmount = (float) env('USSD_TEST_RATE_AMOUNT', 1);
+
         $rates = [
             // Business levy
             ['category' => 'business', 'code' => 'business_new_levy', 'label' => 'New Business Levy', 'unit_label' => 'flat', 'rate' => 1600],
@@ -42,6 +52,10 @@ class LevyRateSeeder extends Seeder
         ];
 
         foreach ($rates as $rate) {
+            if ($testMode) {
+                $rate['rate'] = $testAmount;
+            }
+
             LevyRate::updateOrCreate(['code' => $rate['code']], $rate + ['is_active' => true]);
         }
     }
