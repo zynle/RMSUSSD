@@ -21,9 +21,9 @@ journey (`sparors/laravel-ussd` state machine) covering:
   lets them pay one, or "All" combined.
 - **License** — Liquor/Hunting/Trading, looked up by license number.
 - **Permits** — Work/Trading/Building, looked up by permit number.
-- Every payable journey ends at a shared confirm → PIN → payment → SMS receipt
-  pipeline, backed by a mock-or-live ZynlePay mobile money integration and a
-  mock-or-live SMS gateway.
+- Every payable journey ends at a shared confirm → PIN → **send payment prompt, end
+  session** → background status polling → SMS receipt pipeline (§2a), backed by a
+  mock-or-live ZynlePay mobile money integration and a mock-or-live SMS gateway.
 - **Session-drop resume** — if a session drops, redialling within 3 minutes offers
   "1. Resume / 2. Main Menu"; resuming restores the exact prompt the user was on.
 
@@ -55,12 +55,56 @@ mistakes them for bugs:
 6. Session state amounts are computed from a `levy_rates` table, not hard-coded, so a
    council officer can retune fees without a code change.
 
+## 2a. Payments are asynchronous — this matters
+
+A mobile money collection is a **push**: the gateway sends a prompt to the
+customer's phone, and the customer has to notice it and approve it — that can take
+anywhere from a couple of seconds to a couple of minutes, and sometimes never
+happens at all. A USSD session **cannot stay open** waiting for that; aggregators
+time out sessions after a few seconds of inactivity regardless of what the app is
+doing server-side.
+
+So the flow is deliberately split into two halves:
+
+1. **In the USSD session** (`PinEntryState` → `InitiatePaymentAction`): the PIN is
+   verified, a `transactions` row is created (`status=pending`), and
+   `PaymentGatewayService::initiate()` sends the push. The *only* thing checked
+   synchronously is whether the gateway **accepted the request** — not whether the
+   customer approved it. The session then ends immediately with
+   `PaymentPendingState`: *"A payment prompt has been sent to your phone... you will
+   receive an SMS confirming the result shortly."* If the gateway rejects the
+   request outright (bad payload, gateway down), that's known instantly and
+   `PaymentFailedState` is shown instead — no SMS involved at that point since
+   nothing was sent to the customer.
+2. **Out of band, on a queue worker** (`App\Jobs\CheckZynlePayPaymentJob`): starting
+   `ZYNLEPAY_POLL_FIRST_DELAY` seconds after the push was sent, the job asks
+   `PaymentGatewayService::pollStatus()` for the outcome. If it's still `pending`,
+   the job throws, which triggers Laravel's normal queue retry/backoff — that *is*
+   the polling loop, just expressed as retries instead of a blocking `sleep()`. It
+   keeps trying every `ZYNLEPAY_POLL_INTERVAL` seconds, up to
+   `ZYNLEPAY_POLL_MAX_ATTEMPTS` times (default 24 × 5s = **2 minutes**). Only once
+   the gateway says `success` or `failed` — or the attempts are exhausted, treated
+   as a timeout/failure — does the job update the `transactions` row and send the
+   **one and only** SMS for that payment. A successful payment also marks the
+   source property/license/permit row `paid` at this point, not before.
+
+This is the same pattern `altusMiddleware` uses for its deposit push
+(`DepositCollectionState` + `SendDepositPushJob`) — the important part isn't the
+specific mechanism, it's that **the SMS only ever goes out after the gateway has
+told us the real, final outcome**, never optimistically and never based on a
+synchronous wait that can time out well before the customer has even looked at
+their phone.
+
+**This requires a queue worker to be running** — see §6a. Without one, the initial
+push is still sent (that part is synchronous), but nothing will ever check its
+outcome or send the confirmation SMS.
+
 ## 3. Architecture
 
 ```
 app/Ussd/
   Actions/            StartAction (registration check), RegisterCustomerAction,
-                       ProcessPaymentAction (payment + SMS + persistence)
+                       InitiatePaymentAction (sends the push, ends the session)
   States/
     Welcome/           WelcomeState (unregistered greeting)
     Registration/       full KYC wizard, one state per field
@@ -73,30 +117,36 @@ app/Ussd/
     PropertyRates/       lookup → select (or "All") → cart
     License/             type → number → cart
     Permit/               type → number → cart
-    Shared/               ConfirmPaymentState, PinEntryState, ReceiptState,
-                          PaymentFailedState  — one generic pipeline every
+    Shared/               ConfirmPaymentState, PinEntryState, PaymentPendingState,
+                          PaymentFailedState — one generic pipeline every
                           journey above funnels into
     Errors/               GoodbyeState
   Support/               OptionMenuState, NumericInputState, TextInputState,
                           ErrorRetryTrait — generic base classes so "menu with
                           numbered options" / "enter a number" / "enter free
                           text" aren't reimplemented per-journey
+app/Jobs/
+  CheckZynlePayPaymentJob   background status polling — see §2a
 ```
 
 **Why a generic "cart" pipeline?** Every journey (business levy, market levy, barrier
 levy, property rates, license, permit) ends the same way: an itemised total, a PIN, a
-gateway call, an SMS, a receipt. Rather than duplicate that five times, each journey's
-last Action writes `cart_title` / `cart_items` / `cart_total` / `cart_category` /
-`cart_meta` / `cart_cancel_next` into the USSD record, and hands off to the single
-`ConfirmPaymentState → PinEntryState → ProcessPaymentAction → ReceiptState` chain. This
-is also why adding a brand new levy type is a ~20-line Action, not a new confirm/pin/
-payment/receipt state set.
+gateway push, and (later, async) an SMS. Rather than duplicate that five times, each
+journey's last Action writes `cart_title` / `cart_items` / `cart_total` /
+`cart_category` / `cart_meta` / `cart_cancel_next` into the USSD record, and hands off
+to the single `ConfirmPaymentState → PinEntryState → InitiatePaymentAction →
+PaymentPendingState` chain (with `CheckZynlePayPaymentJob` finishing the job out of
+band — see §2a). This is also why adding a brand new levy type is a ~20-line Action,
+not a new confirm/pin/payment/receipt state set.
 
 ### Services
 
 - `App\Services\PaymentGatewayService` — ZynlePay wrapper (mirrors
-  `ModziPayMiddleware\ZynlePayHelper::processCollection`/`momoDebit`/
-  `checkPaymentStatus`). Mock mode by default.
+  `ModziPayMiddleware\ZynlePayHelper::momoDebit`/`checkPaymentStatus`), split into
+  `initiate()` (send the push, synchronous, fast) and `pollStatus()` (ask for the
+  outcome, called repeatedly from the background job — see §2a). Mock mode by
+  default, including a `ZYNLEPAY_MOCK_PENDING_TICKS` knob to simulate a customer who
+  takes a few polls to respond, for testing the retry loop itself.
 - `App\Services\SmsService` — Zynle SMS wrapper (mirrors
   `ModziPayMiddleware\ZynleSMS::sendSMSNew`). Mock mode by default, every message
   (mocked or real) is logged to `sms_logs`.
@@ -168,6 +218,8 @@ currently assumes SQL rows.
 | `.env` | `USSD_SHORTCODES` | Comma-separated dial codes this app answers, e.g. `262*22` for `*262*22#` |
 | `.env` | `ZYNLEPAY_MOCK=false` + `ZYNLEPAY_MERCHANT_ID` / `ZYNLEPAY_API_ID` / `ZYNLEPAY_API_KEY` / `ZYNLEPAY_SERVICE_ID` / `ZYNLEPAY_STATUS_API_ID` / `ZYNLEPAY_STATUS_API_KEY` | Live ZynlePay collection credentials (see `ModziPayMiddleware/app/Helpers/ZynlePayHelper.php` for where these values come from operationally) |
 | `.env` | `SMS_MOCK=false` + `SMS_SENDER_ID` / `SMS_API_KEY` / `SMS_CLIENT_ID` | Live Zynle SMS credentials |
+| `.env` | `ZYNLEPAY_POLL_FIRST_DELAY` / `ZYNLEPAY_POLL_MAX_ATTEMPTS` / `ZYNLEPAY_POLL_INTERVAL` | How long/often the background job checks for the customer's approval (default: first check after 5s, every 5s after, up to 24 times = 2 minutes) |
+| `.env` | `USSD_TEST_LOW_RATES` | **Set to `false` before going live** — `true` collapses every fee to `USSD_TEST_RATE_AMOUNT` for cheap live-payment smoke testing (see §7a) |
 | `.env` | `DB_CONNECTION` etc. | Switch from SQLite to MySQL for production — no code changes needed, Eloquent/migrations are DB-agnostic |
 | `database/seeders/LevyRateSeeder.php` | levy amounts | Council-specific fee schedule |
 | `database/seeders/CouncilSeeder.php` | council name/shortcode | Per-council identity |
@@ -175,6 +227,31 @@ currently assumes SQL rows.
 
 **Nothing else needs code changes to onboard a new council** — new fee schedule, new
 seed data, new `.env` credentials.
+
+## 6a. Running the queue worker (required)
+
+Since §2a's `CheckZynlePayPaymentJob` runs on Laravel's queue, **a worker process
+must be running at all times** in every environment (local testing included) or
+payment outcomes will never be checked and no confirmation SMS will ever be sent —
+the initial push still goes out, but nothing follows up on it.
+
+```bash
+php artisan queue:work
+```
+
+- **Local testing**: run the above in its own terminal alongside `php artisan serve`.
+- **Production**: supervise it (e.g. Supervisor, systemd, or Laravel Forge's built-in
+  queue worker management) so it restarts automatically if it dies, and restart it
+  after every deploy (`php artisan queue:restart` picks up new code without needing
+  to kill the process manually).
+- **Important**: a running worker reads `.env`/config **once at boot**. If you change
+  `.env` (e.g. flipping `ZYNLEPAY_MOCK_OUTCOME` while testing, or any other setting)
+  the worker must be restarted to see it — `php artisan config:clear` alone is not
+  enough for an already-running worker process.
+- Uses `QUEUE_CONNECTION=database` (the `jobs`/`failed_jobs` tables from Laravel's
+  default migrations) so no extra infrastructure is needed for this prototype; swap
+  to Redis (`QUEUE_CONNECTION=redis`, available via Docker on this machine) for
+  higher-throughput production traffic — no code changes needed, only config.
 
 ## 7. Test/demo data (SQLite, seeded via `php artisan migrate:fresh --seed`)
 
@@ -190,7 +267,25 @@ All registered ratepayers share PIN **`1234`**.
 | `260977000006` | Mary Banda | Market Levy, fresh Business Levy "New application" |
 | `260977000099` | *(unregistered)* | Exercises the full KYC registration journey |
 
-Dial code used throughout testing: `262*22` (maps to `*262*22#`).
+Dial code: `885*228` (`USSD_SHORTCODES`/`USSD_DISPLAY_SHORTCODE` — maps to `*885*228#`).
+
+## 7a. Testing with real money (`USSD_TEST_LOW_RATES`)
+
+To smoke-test an actual mobile money payment without spending the real council fee
+schedule, `.env` currently has:
+
+```
+USSD_TEST_LOW_RATES=true
+USSD_TEST_RATE_AMOUNT=1
+```
+
+With this on (re-run `php artisan db:seed` after toggling it), every figure the
+customer sees is **ZMW 1.00 flat** — including Business Levy, where the Fire/Health/
+Personal Levy components are zeroed out rather than each becoming K1 and summing to
+more than K1. Quantity-based levies (Market table, Barrier livestock/timber/beer/
+grain/mast) are K1 **per unit**, so enter a quantity of 1 for the cheapest possible
+test. **Set `USSD_TEST_LOW_RATES=false` and re-seed before going live** — it is not
+safe to leave on in production.
 
 ## 8. Runtime verification performed
 
@@ -212,8 +307,25 @@ covering both good and bad input at each step:
   pptx's Kumawa Farms + Planet Autospares example)
 - ✅ License — Liquor License lookup and payment (ZMW 5,000.00, matches pptx)
 - ✅ Permit — Work Permit lookup and payment (ZMW 5,000.00, matches pptx)
-- ✅ Payment failure path (`ZYNLEPAY_MOCK_OUTCOME=failed`) — correct failure message,
-  transaction recorded `status=failed`, source record stays `unpaid`, failure SMS sent
+- ✅ **Asynchronous payment pipeline** (§2a) — confirmed the session ends immediately
+  at "A payment prompt has been sent to your phone..." (not a synchronous success/
+  failure screen), and that `CheckZynlePayPaymentJob`, running on a real
+  `php artisan queue:work` worker, resolves it afterwards:
+  - ✅ Immediate success (`ZYNLEPAY_MOCK_OUTCOME=success`) — job runs once, marks the
+    transaction `success`, marks the source record `paid`, sends exactly one SMS
+  - ✅ Immediate failure (`ZYNLEPAY_MOCK_OUTCOME=failed`) — job runs once, marks
+    `failed`, source record stays `unpaid`, "not completed" SMS sent
+  - ✅ **Delayed approval** (`ZYNLEPAY_MOCK_PENDING_TICKS=2`) — watched the job report
+    "still pending", retry with backoff twice, then resolve successfully on the 3rd
+    poll — proving the retry/backoff loop itself works, not just the two instant
+    outcomes above
+  - ✅ **Timeout** (pending forever, `ZYNLEPAY_POLL_MAX_ATTEMPTS=3`) — watched all 3
+    attempts report pending, the job's `failed()` handler fire, the transaction marked
+    `failed` with `{"timeout":true}`, and a "not completed" SMS sent
+  - ✅ Confirmed a running `queue:work` process does **not** pick up `.env` changes
+    until restarted — documented as an operational gotcha in §6a
+- ✅ Gateway rejects the push outright (immediate, synchronous) — `PaymentFailedState`
+  shown right away, no SMS (nothing was ever sent to the customer)
 - ✅ Cancel (`00`) at the confirm screen — returns to the levy menu, cart cleared
 - ✅ PIN lockout — 3 wrong attempts locks the PIN for 5 minutes; a 4th attempt within
   the lockout window is rejected immediately without re-prompting
@@ -253,9 +365,9 @@ integration has the full itemised context, not just a total.
   `USSD_BODY`/`REQUEST_TYPE`). Adjust `UssdController::handle()` if your production
   aggregator's envelope differs — the state machine layer underneath needs no
   changes.
-- `QUEUE_CONNECTION=sync` for the prototype so payment/SMS results are deterministic
-  during testing without a queue worker running. For production, SMS sending is a
-  reasonable candidate to move to a queued job once a worker is supervised.
+- `QUEUE_CONNECTION=database` — simple and dependency-free for this prototype, but a
+  worker must be kept running at all times (see §6a). Redis is a drop-in upgrade for
+  production throughput if needed.
 
 ## 10. Running it
 
@@ -265,6 +377,7 @@ cp .env.example .env   # already pre-filled with mock-mode defaults for this pro
 php artisan key:generate
 php artisan migrate:fresh --seed
 php artisan serve --port=8123
+php artisan queue:work   # in a second terminal — required, see §6a
 ```
 
 Send a USSD request:
@@ -275,11 +388,11 @@ curl -s -X POST http://127.0.0.1:8123/ussd -H "Content-Type: application/json" -
   "ussd_request": {
     "SESSION_ID": "demo1",
     "MSISDN": "260977000001",
-    "MESSAGE": "262*22",
+    "MESSAGE": "885*228",
     "OPERATOR": "MTN"
   }
 }'
 ```
 
 Then continue the same session by re-sending the *entire* dialled string so far in
-`MESSAGE` (e.g. `262*22*1`, then `262*22*1*1`, …) with the same `SESSION_ID`.
+`MESSAGE` (e.g. `885*228*1`, then `885*228*1*1`, …) with the same `SESSION_ID`.

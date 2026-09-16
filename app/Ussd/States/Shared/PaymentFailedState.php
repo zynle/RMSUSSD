@@ -16,10 +16,10 @@ class PaymentFailedState extends State
         $this->record->deleteMultiple(['failure_title', 'failure_reference']);
 
         $this->menu
-            ->line('Payment failed.')
+            ->line('Payment could not be started.')
             ->lineBreak()
-            ->line("We could not process {$title} (Ref: {$reference}).")
-            ->text('Please check your mobile money balance and try again by dialing the USSD code.');
+            ->line("We could not send a payment prompt for {$title} (Ref: {$reference}).")
+            ->text('Please try again shortly by dialing the USSD code.');
     }
 
     protected function afterRendering(string $argument): void

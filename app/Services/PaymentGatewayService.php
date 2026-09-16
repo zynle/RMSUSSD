@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -10,75 +11,100 @@ use Illuminate\Support\Facades\Log;
  * full USSD payment journey can be exercised without live credentials —
  * flip ZYNLEPAY_MOCK=false in .env and fill in the zynlepay.* keys to go
  * live (see config/zynlepay.php).
+ *
+ * IMPORTANT — this is a two-step, asynchronous API by design:
+ *   1. initiate() only sends the mobile money push/prompt and reports
+ *      whether the gateway *accepted the request* (not whether the
+ *      customer approved it — that can take anywhere from a few seconds
+ *      to a couple of minutes, and USSD sessions cannot stay open that
+ *      long). The USSD session must end here.
+ *   2. pollStatus() is called later, out of band (see
+ *      App\Jobs\CheckZynlePayPaymentJob), to find out what the customer
+ *      actually did. Never block an HTTP/USSD request on this.
  */
 class PaymentGatewayService
 {
     /**
-     * Initiate a mobile money collection (debit the subscriber) and poll
-     * for the outcome, mirroring ZynlePayHelper::processCollection.
+     * Send the mobile money collection request (the push/prompt to the
+     * subscriber's phone). Returns immediately — this does NOT wait for
+     * the customer to approve or reject it.
      *
-     * @return array{status: string, gateway_reference: ?string, response: mixed}
+     * @return array{accepted: bool, response: mixed}
      */
-    public function collect(string $phone, float $amount, string $reference): array
+    public function initiate(string $phone, float $amount, string $reference): array
     {
         $phone = str_replace('+', '', $phone);
 
         if (config('zynlepay.mock')) {
-            return $this->mockCollect($phone, $amount, $reference);
+            Log::info('ZynlePay [MOCK] push initiated', ['phone' => $phone, 'amount' => $amount, 'reference' => $reference]);
+
+            return ['accepted' => true, 'response' => ['mock' => true]];
         }
 
-        $initiate = $this->momoDebit($phone, $amount, $reference);
+        $response = $this->momoDebit($phone, $amount, $reference);
+        $accepted = !empty($response) && ($response->response_code ?? null) == '120';
 
-        if (empty($initiate) || ($initiate->response_code ?? null) != '120') {
+        if (!$accepted) {
             Log::warning('ZynlePay collection could not be initiated', [
-                'phone' => $phone, 'reference' => $reference, 'response' => $initiate,
+                'phone' => $phone, 'reference' => $reference, 'response' => $response,
             ]);
-
-            return ['status' => 'failed', 'gateway_reference' => null, 'response' => $initiate];
         }
 
-        $maxRetries = (int) config('zynlepay.max_status_retries', 6);
-        $interval = (int) config('zynlepay.status_retry_seconds', 2);
-
-        for ($i = 0; $i < $maxRetries; $i++) {
-            $status = $this->checkStatus($reference);
-            $code = (string) ($status->response_code ?? '');
-
-            if ($code === '100') {
-                return ['status' => 'success', 'gateway_reference' => $status->reference_no ?? $reference, 'response' => $status];
-            }
-
-            if ($code === '995') {
-                return ['status' => 'failed', 'gateway_reference' => $reference, 'response' => $status];
-            }
-
-            sleep($interval);
-        }
-
-        Log::warning('ZynlePay collection timed out waiting for status', ['reference' => $reference]);
-
-        return ['status' => 'failed', 'gateway_reference' => $reference, 'response' => null];
+        return ['accepted' => $accepted, 'response' => $response];
     }
 
-    protected function mockCollect(string $phone, float $amount, string $reference): array
+    /**
+     * Ask the gateway for the current status of a previously-initiated
+     * collection. Meant to be called repeatedly (with backoff) from a
+     * queued job until it resolves — never in a request/response cycle.
+     *
+     * @return array{status: 'success'|'failed'|'pending', gateway_reference: ?string, response: mixed}
+     */
+    public function pollStatus(string $reference): array
     {
-        $outcome = config('zynlepay.mock_outcome', 'success');
+        if (config('zynlepay.mock')) {
+            // Optionally simulate a customer who takes a few polls to
+            // approve/reject the prompt, so the retry/backoff loop in
+            // CheckZynlePayPaymentJob can be exercised realistically
+            // instead of always resolving on the first poll.
+            $pendingTicks = (int) config('zynlepay.mock_pending_ticks', 0);
 
-        $status = match ($outcome) {
-            'failed' => 'failed',
-            'random' => (mt_rand(1, 100) <= 85) ? 'success' : 'failed',
-            default => 'success',
+            if ($pendingTicks > 0) {
+                $tickKey = "zynlepay_mock_ticks.{$reference}";
+                $seen = (int) Cache::get($tickKey, 0);
+
+                if ($seen < $pendingTicks) {
+                    Cache::put($tickKey, $seen + 1, now()->addMinutes(10));
+                    Log::info('ZynlePay [MOCK] status poll — still pending', ['reference' => $reference, 'tick' => $seen + 1, 'of' => $pendingTicks]);
+
+                    return ['status' => 'pending', 'gateway_reference' => null, 'response' => ['mock' => true, 'outcome' => 'pending']];
+                }
+
+                Cache::forget($tickKey);
+            }
+
+            $outcome = config('zynlepay.mock_outcome', 'success');
+            $status = match ($outcome) {
+                'failed' => 'failed',
+                'random' => (mt_rand(1, 100) <= 85) ? 'success' : 'failed',
+                default => 'success',
+            };
+
+            Log::info('ZynlePay [MOCK] status poll', ['reference' => $reference, 'status' => $status]);
+
+            return ['status' => $status, 'gateway_reference' => 'MOCK-' . $reference, 'response' => ['mock' => true, 'outcome' => $status]];
+        }
+
+        $response = $this->checkStatus($reference);
+        $code = (string) ($response->response_code ?? '');
+
+        $status = match ($code) {
+            '100' => 'success',
+            '995' => 'failed',
+            default => 'pending',
         };
 
-        Log::info('ZynlePay [MOCK] collection simulated', [
-            'phone' => $phone, 'amount' => $amount, 'reference' => $reference, 'status' => $status,
-        ]);
-
-        return [
-            'status' => $status,
-            'gateway_reference' => 'MOCK-' . $reference,
-            'response' => ['mock' => true, 'outcome' => $status],
-        ];
+        return ['status' => $status, 'gateway_reference' => $response->reference_no ?? $reference, 'response' => $response];
     }
 
     protected function momoDebit(string $phone, float $amount, string $reference)

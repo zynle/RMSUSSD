@@ -51,9 +51,19 @@ class LevyRateSeeder extends Seeder
             ['category' => 'barrier', 'code' => 'barrier_mast_unit', 'label' => 'Mast Levy', 'unit_label' => 'per mast', 'rate' => 30],
         ];
 
+        // Codes that must be zeroed out (rather than set to $testAmount) in
+        // test mode so a composite total — e.g. Business Levy, which is
+        // normally Levy + Fire + Health + Personal Levy x employees — comes
+        // to exactly K{$testAmount} flat instead of summing several K1
+        // components into something much larger.
+        $zeroInTestMode = [
+            'business_new_fire', 'business_new_health', 'business_personal_levy',
+            'business_renewal_fire', 'business_renewal_health',
+        ];
+
         foreach ($rates as $rate) {
             if ($testMode) {
-                $rate['rate'] = $testAmount;
+                $rate['rate'] = in_array($rate['code'], $zeroInTestMode, true) ? 0 : $testAmount;
             }
 
             LevyRate::updateOrCreate(['code' => $rate['code']], $rate + ['is_active' => true]);

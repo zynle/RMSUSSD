@@ -82,6 +82,6 @@ class PinEntryState extends State
 
         $ratepayer->update(['pin_attempts' => 0, 'pin_locked_until' => null]);
 
-        $this->decision->any(\App\Ussd\Actions\ProcessPaymentAction::class);
+        $this->decision->any(\App\Ussd\Actions\InitiatePaymentAction::class);
     }
 }
