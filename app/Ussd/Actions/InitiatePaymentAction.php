@@ -48,7 +48,7 @@ class InitiatePaymentAction extends Action
             'status' => 'pending',
         ]);
 
-        $this->record->deleteMultiple(['cart_title', 'cart_items', 'cart_total', 'cart_category', 'cart_meta', 'cart_cancel_next']);
+        $this->record->deleteMultiple(['cart_title', 'cart_items', 'cart_total', 'cart_category', 'cart_meta', 'cart_cancel_next', 'cart_requires_pin']);
 
         SendPaymentPushJob::dispatch($transaction->id);
 

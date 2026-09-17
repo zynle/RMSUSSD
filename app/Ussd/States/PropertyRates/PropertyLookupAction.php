@@ -14,7 +14,7 @@ class PropertyLookupAction extends Action
         $properties = PropertyRecord::where('phone', $phone)->where('status', 'unpaid')->get();
 
         if ($properties->isEmpty()) {
-            $this->record->set('goodbye_message', "You have no outstanding property rates.\n\nThank you for using the Choma Council USSD service.");
+            $this->record->set('goodbye_message', "You have no outstanding property rates.\n\nThank you for using the Local Government Digital Platform. Goodbye.");
 
             return GoodbyeState::class;
         }

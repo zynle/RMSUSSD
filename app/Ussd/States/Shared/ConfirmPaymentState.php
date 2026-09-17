@@ -53,14 +53,18 @@ class ConfirmPaymentState extends State
     protected function afterRendering(string $argument): void
     {
         if ($argument === '1') {
-            $this->decision->any(PinEntryState::class);
+            $requiresPin = $this->record->get('cart_requires_pin', true);
+
+            $this->decision->any(
+                $requiresPin ? PinEntryState::class : \App\Ussd\Actions\InitiatePaymentAction::class
+            );
 
             return;
         }
 
         if ($argument === '00') {
             $cancelNext = $this->record->get('cart_cancel_next', \App\Ussd\States\MainMenuState::class);
-            $this->record->deleteMultiple(['cart_title', 'cart_items', 'cart_total', 'cart_category', 'cart_meta', 'cart_cancel_next']);
+            $this->record->deleteMultiple(['cart_title', 'cart_items', 'cart_total', 'cart_category', 'cart_meta', 'cart_cancel_next', 'cart_requires_pin']);
             $this->decision->any($cancelNext);
 
             return;

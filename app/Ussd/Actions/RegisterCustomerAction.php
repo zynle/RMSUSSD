@@ -17,7 +17,8 @@ class RegisterCustomerAction extends Action
 
     public function run(): string
     {
-        $phone = $this->record->get('phoneNumber');
+        $phone = $this->normalizePhone((string) $this->record->get('phoneNumber'));
+        $this->record->set('phoneNumber', $phone);
         $isNewRegistration = !Ratepayer::where('phone', $phone)->where('is_registered', true)->exists();
 
         $ratepayer = Ratepayer::updateOrCreate(
@@ -55,5 +56,20 @@ class RegisterCustomerAction extends Action
         );
 
         return RegistrationSuccessState::class;
+    }
+
+    protected function normalizePhone(string $phone): string
+    {
+        $phone = preg_replace('/\D/', '', $phone) ?? '';
+
+        if (strlen($phone) === 9) {
+            return "260{$phone}";
+        }
+
+        if (strlen($phone) === 10 && str_starts_with($phone, '0')) {
+            return '26' . $phone;
+        }
+
+        return $phone;
     }
 }

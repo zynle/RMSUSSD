@@ -49,6 +49,20 @@ class LevyRateSeeder extends Seeder
             // Barrier - Grain / Mast
             ['category' => 'barrier', 'code' => 'barrier_grain_bag', 'label' => 'Grain Levy', 'unit_label' => 'per bag', 'rate' => 10],
             ['category' => 'barrier', 'code' => 'barrier_mast_unit', 'label' => 'Mast Levy', 'unit_label' => 'per mast', 'rate' => 30],
+
+            // Once-off applications. These are deliberately available before
+            // ratepayer registration; the mobile-money outcome SMS is their receipt.
+            ['category' => 'once_off', 'code' => 'once_off_business_premises', 'label' => 'Business Premises / Trading Licence', 'unit_label' => 'application', 'rate' => 1600],
+            ['category' => 'once_off', 'code' => 'once_off_building_plan', 'label' => 'Building Plan Approval', 'unit_label' => 'application', 'rate' => 2500],
+            ['category' => 'once_off', 'code' => 'once_off_planning_permission', 'label' => 'Planning / Development Permission', 'unit_label' => 'application', 'rate' => 1500],
+            ['category' => 'once_off', 'code' => 'once_off_change_land_use', 'label' => 'Change of Land Use', 'unit_label' => 'application', 'rate' => 3000],
+            ['category' => 'once_off', 'code' => 'once_off_subdivision', 'label' => 'Subdivision / Consolidation of Plots', 'unit_label' => 'application', 'rate' => 5000],
+            ['category' => 'once_off', 'code' => 'once_off_occupancy_certificate', 'label' => 'Occupancy Certificate', 'unit_label' => 'application', 'rate' => 1200],
+            ['category' => 'once_off', 'code' => 'once_off_fire_safety', 'label' => 'Fire Safety Inspection / Certificate', 'unit_label' => 'application', 'rate' => 750],
+            ['category' => 'once_off', 'code' => 'once_off_outdoor_advertising', 'label' => 'Outdoor Advertising / Billboard Permit', 'unit_label' => 'application', 'rate' => 500],
+            ['category' => 'once_off', 'code' => 'once_off_event_permit', 'label' => 'Event / Public Gathering Permit', 'unit_label' => 'application', 'rate' => 1000],
+            ['category' => 'once_off', 'code' => 'once_off_liquor_licence', 'label' => 'Liquor Licence Application', 'unit_label' => 'application', 'rate' => 5000],
+            ['category' => 'once_off', 'code' => 'once_off_burial_exhumation', 'label' => 'Burial / Exhumation Application', 'unit_label' => 'application', 'rate' => 300],
         ];
 
         // Codes that must be zeroed out (rather than set to $testAmount) in

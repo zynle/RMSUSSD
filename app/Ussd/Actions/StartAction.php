@@ -16,6 +16,18 @@ class StartAction extends Action
 
         $ratepayer = Ratepayer::where('phone', $phone)->where('is_registered', true)->first();
 
+        // Records created before phone numbers were normalized at the HTTP
+        // boundary may still use a local 0xxxxxxxxx format. Let their next
+        // dial repair the stored value so they can access their account.
+        if (!$ratepayer && str_starts_with($phone, '260') && strlen($phone) === 12) {
+            $legacyPhone = '0' . substr($phone, 3);
+            $ratepayer = Ratepayer::where('phone', $legacyPhone)->where('is_registered', true)->first();
+
+            if ($ratepayer) {
+                $ratepayer->update(['phone' => $phone]);
+            }
+        }
+
         if ($ratepayer) {
             $this->record->set('ratepayer_name', $ratepayer->fullName());
 

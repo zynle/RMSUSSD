@@ -23,7 +23,7 @@ class UssdController extends Controller
         $ussdRequest = $request->input('ussd_request', []);
 
         $sessionId = (string) ($ussdRequest['SESSION_ID'] ?? '');
-        $phone = str_replace('+', '', (string) ($ussdRequest['MSISDN'] ?? ''));
+        $phone = $this->normalizePhone((string) ($ussdRequest['MSISDN'] ?? ''));
         $message = (string) ($ussdRequest['MESSAGE'] ?? '');
         $operator = (string) ($ussdRequest['OPERATOR'] ?? '');
 
@@ -171,5 +171,20 @@ class UssdController extends Controller
         Log::debug("USSD response | session={$sessionId}: " . json_encode($responseData));
 
         return response()->json($responseData);
+    }
+
+    protected function normalizePhone(string $phone): string
+    {
+        $phone = preg_replace('/\D/', '', $phone) ?? '';
+
+        if (strlen($phone) === 9) {
+            return "260{$phone}";
+        }
+
+        if (strlen($phone) === 10 && str_starts_with($phone, '0')) {
+            return '26' . $phone;
+        }
+
+        return $phone;
     }
 }

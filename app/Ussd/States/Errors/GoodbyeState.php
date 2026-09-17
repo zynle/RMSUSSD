@@ -10,7 +10,7 @@ class GoodbyeState extends State
 
     protected function beforeRendering(): void
     {
-        $message = $this->record->get('goodbye_message', 'Thank you for using the Choma Council USSD service. Goodbye.');
+        $message = $this->record->get('goodbye_message', 'Thank you for using the Local Government Digital Platform. Goodbye.');
         $this->record->delete('goodbye_message');
 
         $this->menu->text($message);
