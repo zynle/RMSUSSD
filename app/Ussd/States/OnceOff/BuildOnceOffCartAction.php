@@ -3,6 +3,7 @@
 namespace App\Ussd\States\OnceOff;
 
 use App\Models\LevyRate;
+use App\Models\Ratepayer;
 use App\Ussd\States\Shared\ConfirmPaymentState;
 use Sparors\Ussd\Action;
 
@@ -35,7 +36,12 @@ class BuildOnceOffCartAction extends Action
         $this->record->set('cart_category', 'once_off_application');
         $this->record->set('cart_meta', ['rate_code' => $rate->code, 'application' => $rate->label]);
         $this->record->set('cart_cancel_next', OnceOffApplicationState::class);
-        $this->record->set('cart_requires_pin', false);
+        $this->record->set(
+            'cart_requires_pin',
+            Ratepayer::where('phone', $this->record->get('phoneNumber'))
+                ->where('is_registered', true)
+                ->exists()
+        );
         $this->record->delete('once_off_rate_code');
 
         return ConfirmPaymentState::class;
